@@ -5,7 +5,12 @@ from datetime import datetime
 import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from pocketoptionapi.stable_api import PocketOption
+import requests
+import json
+import time
+import hashlib
+import websocket
+import threading
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
