@@ -6,4 +6,3 @@ flask==2.3.3
 gunicorn==21.2.0
 requests==2.31.0
 websocket-client==1.6.1
-pocketoption-api==0.1.1
