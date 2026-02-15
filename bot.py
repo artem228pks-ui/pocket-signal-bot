@@ -11,6 +11,7 @@ import websocket
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -61,7 +62,7 @@ class PocketOptionClient:
         """Получение свечей через WebSocket"""
         try:
             if not self.connected:
-                logging.warning("⚠️ Нет подключения к Pocket Option")
+                logging.warning("⚠️ Нет подключения к Pocket Option, использую тестовые данные")
                 return self._generate_test_candles(count)
             
             # Здесь должен быть запрос свечей через WebSocket
@@ -164,7 +165,8 @@ class TelegramSignalBot:
         keyboard = [
             [InlineKeyboardButton("📊 Подписаться на сигналы", callback_data='subscribe')],
             [InlineKeyboardButton("🔍 Список активов", callback_data='assets')],
-            [InlineKeyboardButton("📈 Статус", callback_data='status')]
+            [InlineKeyboardButton("📈 Статус", callback_data='status')],
+            [InlineKeyboardButton("🛑 Отписаться", callback_data='unsubscribe')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -182,15 +184,17 @@ class TelegramSignalBot:
         query = update.callback_query
         await query.answer()
 
+        user_id = query.from_user.id
+
         if query.data == 'subscribe':
-            self.subscribers.add(query.from_user.id)
+            self.subscribers.add(user_id)
             await query.edit_message_text(
                 "✅ *Ты подписан на сигналы!*\n\n"
                 "Я буду присылать уведомления, когда найду хорошие точки входа.\n"
                 "Первые сигналы могут появиться через 1-2 минуты.",
                 parse_mode='Markdown'
             )
-            logging.info(f"👤 Пользователь {query.from_user.id} подписался")
+            logging.info(f"👤 Пользователь {user_id} подписался")
             
             if not self.is_scanning:
                 self.is_scanning = True
@@ -204,11 +208,58 @@ class TelegramSignalBot:
             )
 
         elif query.data == 'status':
-            status = f"📊 *Статус бота:*\n"
-            status += f"👥 Подписчиков: {len(self.subscribers)}\n"
-            status += f"📈 Активов в мониторинге: {len(self.signal_generator.assets)}\n"
-            status += f"🔄 Статус: {'🟢 Активен' if self.is_scanning else '🔴 Остановлен'}"
-            await query.edit_message_text(status, parse_mode='Markdown')
+            status_text = f"📊 *Статус бота:*\n"
+            status_text += f"👥 Подписчиков: {len(self.subscribers)}\n"
+            status_text += f"📈 Активов в мониторинге: {len(self.signal_generator.assets)}\n"
+            status_text += f"🔄 Статус: {'🟢 Активен' if self.is_scanning else '🔴 Остановлен'}"
+            
+            if self.pocket_client and self.pocket_client.connected:
+                status_text += f"\n✅ Подключено к Pocket Option"
+            else:
+                status_text += f"\n❌ Нет подключения к Pocket Option"
+                
+            await query.edit_message_text(status_text, parse_mode='Markdown')
+
+        elif query.data == 'unsubscribe':
+            if user_id in self.subscribers:
+                self.subscribers.remove(user_id)
+                await query.edit_message_text("🛑 *Ты отписался от сигналов*", parse_mode='Markdown')
+                logging.info(f"👤 Пользователь {user_id} отписался")
+            else:
+                await query.edit_message_text("❌ Ты не был подписан")
+
+    async def subscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /subscribe"""
+        user_id = update.effective_user.id
+        self.subscribers.add(user_id)
+        await update.message.reply_text("✅ Ты подписан на сигналы! (команда)")
+        logging.info(f"👤 Пользователь {user_id} подписался через команду")
+        
+        if not self.is_scanning:
+            self.is_scanning = True
+            asyncio.create_task(self.scan_and_send_signals())
+
+    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /status"""
+        status_text = f"📊 *Статус бота:*\n"
+        status_text += f"👥 Подписчиков: {len(self.subscribers)}\n"
+        status_text += f"📈 Активов в мониторинге: {len(self.signal_generator.assets)}\n"
+        status_text += f"🔄 Статус: {'🟢 Активен' if self.is_scanning else '🔴 Остановлен'}"
+        
+        if self.pocket_client and self.pocket_client.connected:
+            status_text += f"\n✅ Подключено к Pocket Option"
+        else:
+            status_text += f"\n❌ Нет подключения к Pocket Option"
+            
+        await update.message.reply_text(status_text, parse_mode='Markdown')
+
+    async def assets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /assets"""
+        assets_list = "\n".join([f"• `{asset}`" for asset in self.signal_generator.assets])
+        await update.message.reply_text(
+            f"📊 *Отслеживаемые активы:*\n{assets_list}",
+            parse_mode='Markdown'
+        )
 
     def format_signal(self, signal):
         """Форматирование сигнала"""
@@ -266,7 +317,14 @@ class TelegramSignalBot:
     def run(self):
         """Запуск бота"""
         self.application = Application.builder().token(self.token).build()
+        
+        # Команды
         self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("subscribe", self.subscribe_command))
+        self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("assets", self.assets_command))
+        
+        # Кнопки
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         
         logging.info("=" * 50)
